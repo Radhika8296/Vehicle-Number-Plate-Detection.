@@ -1,0 +1,65 @@
+from flask import Flask, render_template, request
+import cv2
+import pytesseract
+import numpy as np
+import os
+
+app = Flask(__name__)
+
+UPLOAD_FOLDER = 'static/uploads/'
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+
+# Set tesseract path
+pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+
+def detect_plate(image_path):
+    img = cv2.imread(image_path)
+    img = cv2.resize(img, (600, 400))
+
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    gray = cv2.bilateralFilter(gray, 11, 17, 17)
+    edged = cv2.Canny(gray, 30, 200)
+
+    contours, _ = cv2.findContours(edged.copy(), cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+    contours = sorted(contours, key=cv2.contourArea, reverse=True)[:10]
+
+    screenCnt = None
+    for c in contours:
+        approx = cv2.approxPolyDP(c, 0.018 * cv2.arcLength(c, True), True)
+        if len(approx) == 4:
+            screenCnt = approx
+            break
+
+    if screenCnt is None:
+        return "No plate detected"
+
+    mask = np.zeros(gray.shape, np.uint8)
+    cv2.drawContours(mask, [screenCnt], 0, 255, -1)
+    new_image = cv2.bitwise_and(img, img, mask=mask)
+
+    (x, y) = np.where(mask == 255)
+    (x1, y1) = (np.min(x), np.min(y))
+    (x2, y2) = (np.max(x), np.max(y))
+    cropped = gray[x1:x2+1, y1:y2+1]
+
+    text = pytesseract.image_to_string(cropped, config='--psm 8')
+    return text
+
+@app.route('/', methods=['GET', 'POST'])
+def index():
+    text = ""
+    image_path = ""
+
+    if request.method == 'POST':
+        file = request.files['image']
+        if file:
+            path = os.path.join(app.config['UPLOAD_FOLDER'], file.filename)
+            file.save(path)
+
+            text = detect_plate(path)
+            image_path = path
+
+    return render_template('index.html', text=text, image_path=image_path)
+
+if __name__ == '__main__':
+    app.run(debug=True)
